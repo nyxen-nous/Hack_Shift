@@ -1,4 +1,7 @@
 """Direct Market abuse protections: weak PINs, PIN lockout, duplicate interests, expiry, OTP."""
+from starlette.requests import Request
+from app.services.rate_limit import client_key
+
 from datetime import timedelta
 
 from app import config
@@ -76,3 +79,28 @@ def test_otp_flow_when_enabled(client, monkeypatch, caplog):
     assert client.post("/api/listings", json={**LISTING, "phone_token": token}).status_code == 201
     # A token for one number does not work for another number.
     assert client.post("/api/listings", json={**LISTING, "phone": "9811122333", "phone_token": token}).status_code == 401
+
+
+def test_forwarded_ip_is_used_only_when_proxy_is_trusted(monkeypatch):
+    request = Request({
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "headers": [
+            (b"x-forwarded-for", b"203.0.113.15, 10.0.0.2")
+        ],
+        "client": ("10.0.0.8", 12345),
+        "server": ("testserver", 80),
+    })
+
+    # Ignore forwarded headers unless explicitly trusted.
+    monkeypatch.setattr(config, "TRUST_PROXY_HEADERS", False)
+    assert client_key(request) == "10.0.0.8"
+
+    # When trusted, use the first forwarded address.
+    monkeypatch.setattr(config, "TRUST_PROXY_HEADERS", True)
+    assert client_key(request) == "203.0.113.15"
